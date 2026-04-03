@@ -138,10 +138,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if is_spam(update.message.from_user.id):
-        await update.message.reply_text("⏳ Подождите пару секунд между запросами")
-        return
-
+    # Анти-спам временно убран для теста
     try:
         user = update.message.from_user
         loc = update.message.location
@@ -149,7 +146,7 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_locations[user.id] = (lat, lon)
 
-        # Неблокирующий geolocator + параллельные запросы
+        # Параллельные запросы к geolocator и API
         loop = asyncio.get_running_loop()
         address_task = loop.run_in_executor(None, get_address, lat, lon)
         
@@ -181,7 +178,6 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"handle_location error: {e}")
         await update.message.reply_text("Ошибка при обработке локации")
-
 
 async def forecast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
