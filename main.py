@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+import time
 from typing import Dict, Tuple
 
 from fastapi import FastAPI, Request
@@ -22,7 +23,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", 0))
 OPENWEATHER_TOKEN = os.getenv("OPENWEATHER_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")          # ← Важно задать в Render!
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 assert BOT_TOKEN, "❌ BOT_TOKEN не установлен!"
 assert OPENWEATHER_TOKEN, "❌ OPENWEATHER_TOKEN не установлен!"
@@ -46,21 +47,41 @@ geolocator = Nominatim(user_agent="weather-bot")
 http_client = AsyncClient(timeout=Timeout(10.0))
 
 user_locations: Dict[int, Tuple[float, float]] = {}
+last_request: Dict[int, float] = {}   # Анти-спам
+
+
+def is_spam(user_id: int) -> bool:
+    """Простая защита от спама (2 секунды между запросами)"""
+    now = time.time()
+    if user_id in last_request and now - last_request[user_id] < 2:
+        return True
+    last_request[user_id] = now
+    return False
 
 
 async def safe_request(url: str, params: dict, retries: int = 3):
+    """Улучшенный запрос с умным retry"""
     for attempt in range(retries):
         try:
             response = await http_client.get(url, params=params)
+            
             if response.status_code == 200:
                 return response.json()
-            logger.warning(f"HTTP {response.status_code} (attempt {attempt+1})")
+            elif response.status_code == 429:          # Rate limit
+                await asyncio.sleep(2)
+            elif response.status_code >= 500:          # Серверные ошибки
+                await asyncio.sleep(1 * (attempt + 1))
+            else:
+                logger.warning(f"HTTP {response.status_code}")
+                break
+                
         except RequestError as e:
             logger.warning(f"Request error (attempt {attempt+1}): {e}")
-        await asyncio.sleep(1 * (attempt + 1))
+            await asyncio.sleep(1 * (attempt + 1))
     return None
 
 
+# ====================== CORE FUNCTIONS ======================
 def get_address(lat: float, lon: float) -> str:
     try:
         location = geolocator.reverse((lat, lon), language="ru")
@@ -117,6 +138,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_spam(update.message.from_user.id):
+        await update.message.reply_text("⏳ Подождите пару секунд между запросами")
+        return
+
     try:
         user = update.message.from_user
         loc = update.message.location
@@ -124,14 +149,25 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_locations[user.id] = (lat, lon)
 
-        address = get_address(lat, lon)
-        weather, forecast = await asyncio.gather(
+        # Неблокирующий geolocator + параллельные запросы
+        loop = asyncio.get_running_loop()
+        address_task = loop.run_in_executor(None, get_address, lat, lon)
+        
+        weather, forecast, address = await asyncio.gather(
             get_weather(lat, lon),
             get_forecast(lat, lon),
+            address_task
         )
 
         map_url = f"https://static-maps.yandex.ru/1.x/?ll={lon},{lat}&size=450,300&z=14&l=map&pt={lon},{lat},pm2rdm"
-        caption = f"📍 {address}\n\n{weather}\n\n{forecast}"
+        
+        caption = (
+            f"📍 {address}\n"
+            f"{'─'*25}\n\n"
+            f"{weather}\n\n"
+            f"{'─'*25}\n"
+            f"{forecast}"
+        )
 
         await update.message.reply_photo(photo=map_url, caption=caption)
 
@@ -141,6 +177,7 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 photo=map_url,
                 caption=f"👤 @{user.username or user.first_name}\n📍 {address}\n\n{weather}\n\n{forecast}",
             )
+
     except Exception as e:
         logger.error(f"handle_location error: {e}")
         await update.message.reply_text("Ошибка при обработке локации")
@@ -189,7 +226,7 @@ async def startup():
         await bot.set_webhook(WEBHOOK_URL)
         logger.info(f"✅ Webhook успешно установлен: {WEBHOOK_URL}")
     else:
-        logger.warning("⚠️ WEBHOOK_URL не задан!")
+        logger.error("❌ WEBHOOK_URL не задан в переменных окружения!")
 
 
 @app.on_event("shutdown")
