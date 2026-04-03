@@ -178,3 +178,34 @@ async def forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
 bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(CommandHandler("forecast", forecast))
+bot_app.add_handler(MessageHandler(filters.LOCATION, handle_location))
+bot_app.add_error_handler(lambda update, context: logging.error(f"Error: {context.error}"))
+
+
+# === FastAPI ===
+@app.get("/")
+async def root():
+    return {"status": "OK", "message": "Bot is running"}
+
+
+@app.post(WEBHOOK_PATH)
+async def webhook_handler(update: Dict[str, Any]):
+    telegram_update = Update.de_json(update, bot_app.bot)
+    await bot_app.process_update(telegram_update)
+    return {"status": "ok"}
+
+
+@app.on_event("startup")
+async def on_startup():
+    try:
+        await bot_app.initialize()
+        await bot_app.start()
+        await bot_app.bot.set_webhook(WEBHOOK_URL)
+        print(f"✅ Webhook успешно установлен: {WEBHOOK_URL}")
+    except Exception as e:
+        print(f"❌ Ошибка установки webhook: {e}")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
