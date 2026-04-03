@@ -209,6 +209,11 @@ async def health():
 @app.post(WEBHOOK_PATH)
 async def webhook(req: Request):
     data = await req.json()
+
+    # 🔹 Логируем весь апдейт для отладки
+    print("===== NEW UPDATE =====")
+    print(data)
+
     update = Update.de_json(data, bot)
     await bot_app.process_update(update)
     return {"ok": True}
