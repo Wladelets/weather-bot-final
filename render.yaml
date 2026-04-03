@@ -4,14 +4,18 @@ services:
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    autoDeploy: true
+     autoDeploy: true
     healthCheckPath: /
     envVars:
       - key: BOT_TOKEN
+        value: "8556783740:AAHNH11Dfbws3TQhCjrxkSn7_rm8kG1hCF8"
         sync: false
       - key: OPENWEATHER_TOKEN
+        value: "a6115733a483924112f4edb9f3c83482"
         sync: false
       - key: OWNER_ID
+        value: "7749916934"
         sync: false
       - key: WEBHOOK_URL
+        value: "https://weather-bot-final.onrender.com/webhook/<токен_бота>"
         sync: false
