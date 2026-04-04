@@ -214,7 +214,7 @@ async def webhook(req: Request):
     print("===== NEW UPDATE =====")
     print(data)
 
-    update = Update.de_json(data, bot)
+    update = Update.de_json(data, bot_app.bot)
     await bot_app.process_update(update)
     return {"ok": True}
 
