@@ -8,7 +8,7 @@ services:
     healthCheckPath: /
     envVars:
       - key: BOT_TOKEN
-        value: "8556783740:AAHNH11Dfbws3TQhCjrxkSn7_rm8kG1hCF8"
+        value: "8556783740:AAHSgNZLa4fWcCWzj8mtASV7dBdiuQKicLI"
         sync: false
       - key: OPENWEATHER_TOKEN
         value: "a6115733a483924112f4edb9f3c83482"
