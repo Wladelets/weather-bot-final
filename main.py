@@ -59,6 +59,8 @@ http_client = AsyncClient(timeout=Timeout(10.0))
 user_locations: Dict[int, Tuple[float, float]] = {}
 last_request: Dict[int, float] = {}   # Анти-спам
 
+user_languages: Dict[int, str] = {}
+
 
 def is_spam(user_id: int) -> bool:
     """Простая защита от спама (2 секунды между запросами)"""
@@ -369,39 +371,6 @@ def generate_ai_advice(temp, wind, humidity, uv):
     
 
     # ======================
-    # ПРОГНОЗ КАЖДЫЕ 3 ЧАСА
-    # ======================
-
-    result.append("📍 СЕГОДНЯ ПО ЧАСАМ\n")
-
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    hourly_count = 0
-
-    for item in data["list"]:
-        dt = item["dt_txt"]
-
-        if not dt.startswith(today):
-            continue
-
-        hour = dt.split(" ")[1][:5]
-
-        desc = item["weather"][0]["description"].capitalize()
-
-        emoji = weather_emoji(desc)
-
-        temp = round(item["main"]["temp"])
-
-        result.append(
-            f"🕒 {hour}   {emoji} {temp}°C   {desc}"
-        )
-
-        hourly_count += 1
-
-        if hourly_count >= 8:
-            break
-
-    # ======================
     # ПРОГНОЗ НА 4 ДНЯ
     # ======================
 
@@ -507,6 +476,9 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Анти-спам временно убран для теста
     try:
         user = update.message.from_user
+        lang = update.effective_user.language_code or "en"
+
+        user_languages[user.id] = lang
         loc = update.message.location
         lat, lon = loc.latitude, loc.longitude
 
