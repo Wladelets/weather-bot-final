@@ -5,11 +5,19 @@ import time
 from typing import Dict, Tuple
 
 from fastapi import FastAPI, Request
-from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton
+from telegram import (
+    Update,
+    Bot,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -94,38 +102,53 @@ def get_address(lat: float, lon: float) -> str:
 
 
 async def get_weather(lat: float, lon: float) -> str:
+
     data = await safe_request(
         "https://api.openweathermap.org/data/2.5/weather",
-        {"lat": lat, "lon": lon, "appid": OPENWEATHER_TOKEN, "units": "metric", "lang": "ru"},
+        {
+            "lat": lat,
+            "lon": lon,
+            "appid": OPENWEATHER_TOKEN,
+            "units": "metric",
+            "lang": "ru",
+        },
     )
-    if not data or "main" not in data:
+
+    if not data:
         return "❌ Не удалось получить погоду"
+
+    desc = data["weather"][0]["description"].capitalize()
+
+    emoji = weather_emoji(desc)
+
+    sunrise = datetime.fromtimestamp(
+        data["sys"]["sunrise"]
+    ).strftime("%H:%M")
+
+    sunset = datetime.fromtimestamp(
+        data["sys"]["sunset"]
+    ).strftime("%H:%M")
+
     return (
-        desc = data['weather'][0]['description'].capitalize()
-emoji = weather_emoji(desc)
+        f"╔════════════════╗\n"
+        f"   🌍 WEATHER ULTRA\n"
+        f"╚════════════════╝\n\n"
 
-sunrise = datetime.fromtimestamp(data["sys"]["sunrise"]).strftime("%H:%M")
-sunset = datetime.fromtimestamp(data["sys"]["sunset"]).strftime("%H:%M")
+        f"{emoji} {desc}\n\n"
 
-return (
-    f"╔════════════════╗\n"
-    f"      🌍 WEATHER ULTRA\n"
-    f"╚════════════════╝\n\n"
+        f"🌡 Температура: {data['main']['temp']}°C\n"
+        f"🥵 Ощущается: {data['main']['feels_like']}°C\n"
+        f"💧 Влажность: {data['main']['humidity']}%\n"
+        f"💨 Ветер: {data['wind']['speed']} м/с\n"
+        f"📊 Давление: {data['main']['pressure']} hPa\n\n"
 
-    f"{emoji} {desc}\n\n"
-
-    f"🌡 Температура: {data['main']['temp']}°C\n"
-    f"🥵 Ощущается: {data['main']['feels_like']}°C\n"
-    f"💧 Влажность: {data['main']['humidity']}%\n"
-    f"💨 Ветер: {data['wind']['speed']} м/с\n"
-    f"📊 Давление: {data['main']['pressure']} hPa\n\n"
-
-    f"🌅 Восход: {sunrise}\n"
-    f"🌇 Закат: {sunset}"
-)
+        f"🌅 Восход: {sunrise}\n"
+        f"🌇 Закат: {sunset}"
+    )
 
 
 async def get_forecast(lat: float, lon: float) -> str:
+
     data = await safe_request(
         "https://api.openweathermap.org/data/2.5/forecast",
         {
@@ -140,44 +163,97 @@ async def get_forecast(lat: float, lon: float) -> str:
     if not data:
         return "❌ Forecast unavailable"
 
-    lines = ["📅 ПРОГНОЗ НА 4 ДНЯ\n"]
+    result = []
 
-    added_days = set()
+    # ==================================
+    # СЕГОДНЯ КАЖДЫЕ 3 ЧАСА
+    # ==================================
+
+    result.append("🕒 <b>СЕГОДНЯ ПО ЧАСАМ</b>\n")
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    hourly_count = 0
 
     for item in data["list"]:
+
         dt = item["dt_txt"]
 
-        date_part = dt.split()[0]
-
-        hour = dt.split()[1][:2]
-
-        # только утро и вечер
-        if hour not in ["09", "18"]:
+        if not dt.startswith(today):
             continue
 
-        if len(added_days) >= 4 and date_part not in added_days:
-            break
+        hour = dt.split(" ")[1][:5]
 
-        added_days.add(date_part)
+        desc = item["weather"][0]["description"].capitalize()
 
-        icon = "☀️"
+        emoji = weather_emoji(desc)
 
-        weather = item["weather"][0]["main"].lower()
+        temp = round(item["main"]["temp"])
 
-        if "rain" in weather:
-            icon = "🌧"
-        elif "cloud" in weather:
-            icon = "☁️"
-        elif "snow" in weather:
-            icon = "❄️"
-
-        lines.append(
-            f"{icon} {date_part} {hour}:00\n"
-            f"🌡 {item['main']['temp']}°C\n"
-            f"💨 {item['wind']['speed']} м/с\n"
+        result.append(
+            f"🕒 {hour}  {emoji} {temp}°C  {desc}"
         )
 
-    return "\n".join(lines)
+        hourly_count += 1
+
+        if hourly_count >= 8:
+            break
+
+    # ==================================
+    # СЛЕДУЮЩИЕ 4 ДНЯ
+    # ==================================
+
+    result.append("\n📅 <b>ПРОГНОЗ НА 4 ДНЯ</b>\n")
+
+    grouped = defaultdict(list)
+
+    for item in data["list"]:
+
+        dt = item["dt_txt"]
+
+        date = dt.split(" ")[0]
+
+        hour = int(dt.split(" ")[1][:2])
+
+        if hour not in [9, 18]:
+            continue
+
+        label = "🌅 Утро" if hour == 9 else "🌙 Вечер"
+
+        desc = item["weather"][0]["description"].capitalize()
+
+        emoji = weather_emoji(desc)
+
+        temp = round(item["main"]["temp"])
+
+        grouped[date].append(
+            f"{label}\n"
+            f"{emoji} {desc}\n"
+            f"🌡 {temp}°C"
+        )
+
+    day_count = 0
+
+    for date, entries in grouped.items():
+
+        if day_count >= 4:
+            break
+
+        pretty = datetime.strptime(
+            date,
+            "%Y-%m-%d"
+        ).strftime("%d.%m")
+
+        result.append("━━━━━━━━━━")
+        result.append(f"🗓 <b>{pretty}</b>")
+
+        for entry in entries:
+            result.append(entry)
+            result.append("")
+
+        day_count += 1
+
+    return "\n".join(result)
     # ====================== UV INDEX ======================
 async def get_uv_index(lat: float, lon: float) -> str:
     data = await safe_request(
@@ -467,36 +543,26 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         map_url = (
-            f"https://tile.openweathermap.org/map/precipitation_new/5/"
-            f"{int((lon+180)/360*32)}/"
-            f"{int((1-(lat+90)/180)*32)}.png"
+            f"https://tile.openweathermap.org/map/precipitation_new/5/16/10.png"
             f"?appid={OPENWEATHER_TOKEN}"
         )
-
-        map_url = f"https://static-maps.yandex.ru/1.x/?ll={lon},{lat}&size=450,300&z=14&l=map&pt={lon},{lat},pm2rdm"
-
-        caption = (
-            f"📍 <b>{address}</b>\n\n"
         
-            f"╔════════════╗\n"
-            f"      🌦 WEATHER DASHBOARD\n"
-            f"╚════════════╝\n\n"
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔄 Refresh", callback_data="refresh"),
+                InlineKeyboardButton("📅 Weekly", callback_data="weekly"),
+            ],
+            [
+                InlineKeyboardButton("🌍 Change location", callback_data="change")
+            ]
+        ])
         
-            f"{weather}\n\n"
-        
-            f"{uv}\n\n"
-        
-            f"{air}\n\n"
-        
-            f"{sun}\n\n"
-        
-            f"🧠 <b>AI ADVICE</b>\n"
-            f"{ai_advice}\n\n"
-        
-            f"{forecast}"
+        await update.message.reply_photo(
+            photo=map_url,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=keyboard
         )
-        
-        await update.message.reply_photo(photo=map_url, caption=caption)
 
         if OWNER_ID:
             await context.bot.send_photo(
@@ -518,6 +584,60 @@ async def forecast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     forecast_text = await get_forecast(lat, lon)
     await update.message.reply_text(forecast_text)
 
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    user_id = query.from_user.id
+
+    if user_id not in user_locations:
+        await query.message.reply_text(
+            "📍 Отправь геолокацию"
+        )
+        return
+
+    lat, lon = user_locations[user_id]
+
+    if query.data == "refresh":
+
+        weather = await get_weather(lat, lon)
+
+        forecast = await get_forecast(lat, lon)
+
+        await query.message.reply_text(
+            f"{weather}\n\n{forecast}",
+            parse_mode="HTML"
+        )
+
+    elif query.data == "weekly":
+
+        forecast = await get_forecast(lat, lon)
+
+        await query.message.reply_text(
+            forecast,
+            parse_mode="HTML"
+        )
+
+    elif query.data == "change":
+
+        keyboard = [[
+            KeyboardButton(
+                "📍 Отправить геолокацию",
+                request_location=True
+            )
+        ]]
+
+        await query.message.reply_text(
+            "🌍 Отправь новую геолокацию",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard,
+                resize_keyboard=True
+            )
+        )
+
+
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Global error: {context.error}")
@@ -528,6 +648,9 @@ parse_mode="HTML"
 # ====================== BOT SETUP ======================
 bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(CommandHandler("forecast", forecast_cmd))
+bot_app.add_handler(
+    CallbackQueryHandler(button_callback)
+)
 bot_app.add_handler(MessageHandler(filters.LOCATION, handle_location))
 bot_app.add_error_handler(error_handler)
 
