@@ -658,35 +658,33 @@ async def forecast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # =========================
     # 🧠 SMART GEO RESOLVER
     # =========================
-
 async def resolve_city(text: str, user_lat=None, user_lon=None):
 
-    raw = text.strip().lower()
-    raw = normalize_city(raw)
+    raw = normalize_city(text)
     key = raw
-
     # =========================
     # 1. NEAR ME SUPPORT
     # =========================
-    if raw in ["near me", "me", "my location"] and user_lat and user_lon:
-    return user_lat, user_lon, "📍 Your location"
 
+    if raw in ["near me", "me", "my location"] and user_lat and user_lon:
+        return user_lat, user_lon, "📍 Your location"
     # =========================
     # 2. CACHE CHECK
     # =========================
+
     if key in geo_cache:
         return geo_cache[key]
-
     # =========================
     # 3. AUTOCORRECTION
     # =========================
+
     match = get_close_matches(raw, KNOWN_CITIES, n=1, cutoff=0.7)
     if match:
         raw = match[0]
-
     # =========================
     # 4. OPENWEATHER DIRECT (FAST PATH)
     # =========================
+
     data = await safe_request(
         "https://api.openweathermap.org/data/2.5/weather",
         {
@@ -697,16 +695,17 @@ async def resolve_city(text: str, user_lat=None, user_lon=None):
     )
 
     if data:
-        lat = data["coord"]["lat"]
-        lon = data["coord"]["lon"]
-
-        geo_cache[key] = (lat, lon, raw.title())
-
-        return lat, lon, raw.title()
-
+        result = (
+            data["coord"]["lat"],
+            data["coord"]["lon"],
+            raw.title()
+        )
+        geo_cache[key] = result
+        return result
     # =========================
     # 5. FALLBACK GEOPY
     # =========================
+
     location = geolocator.geocode(raw)
 
     if location:
@@ -715,6 +714,7 @@ async def resolve_city(text: str, user_lat=None, user_lon=None):
         return result
 
     return None
+
 
 async def city_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
