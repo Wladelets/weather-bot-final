@@ -622,10 +622,6 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
         
-        await update.message.reply_animation(
-            animation=radar_gif,
-            caption="🛰 Live Weather Radar""🌧 Rain probability next hour: HIGH"
-        )
 
         if OWNER_ID:
             await context.bot.send_photo(
