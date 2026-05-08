@@ -26,7 +26,6 @@ from dotenv import load_dotenv
 from httpx import AsyncClient, Timeout, RequestError
 from datetime import datetime
 from collections import defaultdict
-from difflib import get_close_matches
 
 # ====================== CONFIG ======================
 load_dotenv()
@@ -63,15 +62,7 @@ last_request: Dict[int, float] = {}   # Анти-спам
 user_languages: Dict[int, str] = {}
 weather_cache = {}
 weather_alert_tasks = {}
-city_cache = {}  # name -> (lat, lon)
-geo_cache = {}   # normalized query -> result
-KNOWN_CITIES = [
-    "london", "paris", "tokyo", "new york", "berlin",
-    "madrid", "rome"
-]
 
-def normalize_city(text: str) -> str:
-    return text.strip().lower()
 
 def is_spam(user_id: int) -> bool:
     """Простая защита от спама (2 секунды между запросами)"""
@@ -207,9 +198,7 @@ async def get_forecast(lat: float, lon: float) -> str:
 
     result.append("🕒 <b>СЕГОДНЯ ПО ЧАСАМ</b>\n")
 
-    from datetime import timezone
-
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
 
     hourly_count = 0
 
@@ -581,16 +570,12 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"&pt={lon},{lat},pm2rdm"
         )
 
-        radar_url = "https://tilecache.rainviewer.com/v2/radar/latest/512/6/32/22/2/1_1.png"
-
-        await update.message.reply_photo(
-            photo=radar_url,
-            caption="🛰 Radar snapshot (last 10 min)"
+        radar_url = (
+            "https://tilecache.rainviewer.com/"
         )
         
-        radar_map = (
-            f"https://tile.openweathermap.org/map/precipitation_new/"
-            f"5/{int(lon)}/{int(lat)}.png?appid={OPENWEATHER_TOKEN}"
+        radar_gif = (
+            "https://media.giphy.com/media/3o7TKtnuHOHHUjR38Y/giphy.gif"
         )
         
         keyboard = InlineKeyboardMarkup([
@@ -602,26 +587,45 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("🌍 Change location", callback_data="change")
             ]
         ])
+        caption = (
+            f"╔══════════════════╗\n"
+            f"     🌍 WEATHER ULTRA\n"
+            f"╚══════════════════╝\n\n"
+                
+            f"📍 <b>{address}</b>\n\n"
+
+            f"{theme}\n\n"
+                
+            f"{weather}\n\n"
+                
+            f"━━━━━━━━━━\n"
+            f"{uv}\n\n"
+                
+            f"━━━━━━━━━━\n"
+            f"{air}\n\n"
+                
+            f"━━━━━━━━━━\n"
+            f"{sun}\n\n"
+                
+            f"━━━━━━━━━━\n"
+            f"🧠 <b>SMART WEATHER INSIGHT</b>\n"
+            f"{ai_advice}\n\n"
+                
+            f"━━━━━━━━━━\n"
+            f"{forecast}"
+        )
+                
+        
         await update.message.reply_photo(
             photo=map_url,
-            caption=(
-                f"🌍 WEATHER ULTRA\n\n"
-                f"📍 {address}\n\n"
-                f"{theme}\n\n"
-                f"{weather}\n\n"
-                f"{uv}\n"
-                f"{air}\n"
-                f"{sun}\n\n"
-                f"🧠 SMART INSIGHT:\n{ai_advice}"
-            ),
+            caption=caption,
             parse_mode="HTML",
             reply_markup=keyboard
         )
-        await update.message.reply_text(
-            forecast,
-            parse_mode="HTML"
+        await update.message.reply_animation(
+            animation=radar_gif,
+            caption="🛰 Live Weather Radar"
         )
-        
 
         if OWNER_ID:
             await context.bot.send_photo(
@@ -642,91 +646,53 @@ async def forecast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lat, lon = user_locations[user_id]
     forecast_text = await get_forecast(lat, lon)
     await update.message.reply_text(forecast_text)
-    # =========================
-    # 🧠 SMART GEO RESOLVER
-    # =========================
-async def resolve_city(text: str, user_lat=None, user_lon=None):
-
-    raw = normalize_city(text)
-    key = raw
-    # =========================
-    # 1. NEAR ME SUPPORT
-    # =========================
-
-    if raw in ["near me", "me", "my location"] and user_lat and user_lon:
-        return user_lat, user_lon, "📍 Your location"
-    # =========================
-    # 2. CACHE CHECK
-    # =========================
-
-    if key in geo_cache:
-        return geo_cache[key]
-    # =========================
-    # 3. AUTOCORRECTION
-    # =========================
-
-    match = get_close_matches(raw, KNOWN_CITIES, n=1, cutoff=0.7)
-    if match:
-        raw = match[0]
-    # =========================
-    # 4. OPENWEATHER DIRECT (FAST PATH)
-    # =========================
-
-    data = await safe_request(
-        "https://api.openweathermap.org/data/2.5/weather",
-        {
-            "q": raw,
-            "appid": OPENWEATHER_TOKEN,
-            "units": "metric",
-        },
-    )
-
-    if data:
-        result = (
-            data["coord"]["lat"],
-            data["coord"]["lon"],
-            raw.title()
-        )
-        geo_cache[key] = result
-        return result
-    # =========================
-    # 5. FALLBACK GEOPY
-    # =========================
-
-    location = geolocator.geocode(raw)
-
-    if location:
-        result = (location.latitude, location.longitude, location.address)
-        geo_cache[key] = result
-        return result
-
-    return None
-
 
 async def city_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    text = normalize_city(update.message.text)
+    text = update.message.text.strip()
+
+    if text.startswith("/"):
+        return
 
     try:
-        result = await resolve_city(text)
+        # 1) пробуем geocode
+        location = geolocator.geocode(text)
 
-        if not result:
-            await update.message.reply_text("❌ City not found")
-            return
+        if location:
+            lat = location.latitude
+            lon = location.longitude
 
-        lat, lon, name = result
+        else:
+            # 2) FALLBACK — OpenWeather direct city search
+            data = await safe_request(
+                "https://api.openweathermap.org/data/2.5/weather",
+                {
+                    "q": text,
+                    "appid": OPENWEATHER_TOKEN,
+                    "units": "metric",
+                    "lang": "ru",
+                },
+            )
 
+            if not data:
+                await update.message.reply_text("❌ City not found")
+                return
+
+            lat = data["coord"]["lat"]
+            lon = data["coord"]["lon"]
+
+        # 3) теперь используем старую систему (ВАЖНО!)
         weather = await get_weather(lat, lon)
         forecast = await get_forecast(lat, lon)
 
         await update.message.reply_text(
-            f"📍 {name}\n\n{weather}\n\n{forecast}",
+            f"📍 {text}\n\n{weather}\n\n{forecast}",
             parse_mode="HTML"
         )
 
     except Exception as e:
-        logger.error(e)
-        await update.message.reply_text("❌ Error getting city weather")
+        logger.error(f"city_weather error: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
