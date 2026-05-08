@@ -649,42 +649,50 @@ async def forecast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def city_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    text = update.message.text
+    text = update.message.text.strip()
 
-    # игнор команд
     if text.startswith("/"):
         return
 
     try:
-
+        # 1) пробуем geocode
         location = geolocator.geocode(text)
 
-        if not location:
-            await update.message.reply_text(
-                "❌ City not found"
+        if location:
+            lat = location.latitude
+            lon = location.longitude
+
+        else:
+            # 2) FALLBACK — OpenWeather direct city search
+            data = await safe_request(
+                "https://api.openweathermap.org/data/2.5/weather",
+                {
+                    "q": text,
+                    "appid": OPENWEATHER_TOKEN,
+                    "units": "metric",
+                    "lang": "ru",
+                },
             )
-            return
 
-        lat = location.latitude
-        lon = location.longitude
+            if not data:
+                await update.message.reply_text("❌ City not found")
+                return
 
+            lat = data["coord"]["lat"]
+            lon = data["coord"]["lon"]
+
+        # 3) теперь используем старую систему (ВАЖНО!)
         weather = await get_weather(lat, lon)
-
         forecast = await get_forecast(lat, lon)
 
         await update.message.reply_text(
-            f"📍 {location.address}\n\n"
-            f"{weather}\n\n"
-            f"{forecast}",
+            f"📍 {text}\n\n{weather}\n\n{forecast}",
             parse_mode="HTML"
         )
 
     except Exception as e:
-        logger.error(e)
-
-        await update.message.reply_text(
-            "❌ Error getting city weather"
-        )
+        logger.error(f"city_weather error: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
