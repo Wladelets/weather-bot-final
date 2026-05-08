@@ -122,6 +122,12 @@ async def get_weather(lat: float, lon: float) -> str:
     desc = data["weather"][0]["description"].capitalize()
 
     emoji = weather_emoji(desc)
+    theme = "🌙 NIGHT MODE"
+
+    hour_now = datetime.now().hour
+    
+    if 6 <= hour_now <= 18:
+        theme = "☀️ DAY MODE"
 
     sunrise = datetime.fromtimestamp(
         data["sys"]["sunrise"]
@@ -457,12 +463,37 @@ def weather_emoji(desc: str) -> str:
 
     return "🌤"
 
+def tr(lang: str, ru: str, en: str):
+
+    if lang.startswith("ru"):
+        return ru
+
+    return en
+
 # ====================== HANDLERS ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[KeyboardButton("📍 Отправить геолокацию", request_location=True)]]
+
+    lang = update.effective_user.language_code or "en"
+
+    user_languages[update.effective_user.id] = lang
+
+    keyboard = [[
+        KeyboardButton(
+            "📍 Отправить геолокацию",
+            request_location=True
+        )
+    ]]
+
     await update.message.reply_text(
-        "Нажми кнопку и получи погоду 👇",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+        tr(
+            lang,
+            "Нажми кнопку и получи погоду 👇",
+            "Press button to get weather 👇"
+        ),
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard,
+            resize_keyboard=True
+        ),
     )
     if OWNER_ID:
         user = update.message.from_user
@@ -482,6 +513,13 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loc = update.message.location
         lat, lon = loc.latitude, loc.longitude
 
+        hour_now = datetime.now().hour
+        
+        theme = "🌙 NIGHT MODE"
+        
+        if 6 <= hour_now <= 18:
+            theme = "☀️ DAY MODE"
+        
         user_locations[user.id] = (lat, lon)
 
         # Параллельные запросы к geolocator и API
@@ -518,6 +556,18 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"https://tile.openweathermap.org/map/precipitation_new/5/16/10.png"
             f"?appid={OPENWEATHER_TOKEN}"
         )
+        map_url = (
+            f"https://static-maps.yandex.ru/1.x/"
+            f"?ll={lon},{lat}"
+            f"&size=650,450"
+            f"&z=9"
+            f"&l=map"
+            f"&pt={lon},{lat},pm2rdm"
+        )
+        
+        radar_gif = (
+            "https://media.giphy.com/media/3o7TKtnuHOHHUjR38Y/giphy.gif"
+        )
         
         keyboard = InlineKeyboardMarkup([
             [
@@ -528,12 +578,44 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("🌍 Change location", callback_data="change")
             ]
         ])
+        caption = (
+            f"╔══════════════════╗\n"
+            f"     🌍 WEATHER ULTRA\n"
+            f"╚══════════════════╝\n\n"
+                
+            f"📍 <b>{address}</b>\n\n"
+
+            f"{theme}\n\n"
+                
+            f"{weather}\n\n"
+                
+            f"━━━━━━━━━━\n"
+            f"{uv}\n\n"
+                
+            f"━━━━━━━━━━\n"
+            f"{air}\n\n"
+                
+            f"━━━━━━━━━━\n"
+            f"{sun}\n\n"
+                
+            f"━━━━━━━━━━\n"
+            f"🧠 <b>SMART WEATHER INSIGHT</b>\n"
+            f"{ai_advice}\n\n"
+                
+            f"━━━━━━━━━━\n"
+            f"{forecast}"
+        )
+                
         
         await update.message.reply_photo(
             photo=map_url,
             caption=caption,
             parse_mode="HTML",
             reply_markup=keyboard
+        )
+        await update.message.reply_animation(
+            animation=radar_gif,
+            caption="🛰 Live Weather Radar"
         )
 
         if OWNER_ID:
