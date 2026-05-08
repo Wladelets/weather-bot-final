@@ -646,53 +646,91 @@ async def forecast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lat, lon = user_locations[user_id]
     forecast_text = await get_forecast(lat, lon)
     await update.message.reply_text(forecast_text)
+    # =========================
+    # 🧠 SMART GEO RESOLVER
+    # =========================
+
+async def resolve_city(text: str, user_lat=None, user_lon=None):
+
+    raw = text.strip().lower()
+    key = raw
+
+    # =========================
+    # 1. NEAR ME SUPPORT
+    # =========================
+    if raw in ["near me", "me", "my location"] and user_lat and user_lon:
+        return user_lat, user_lon, "📍 Your location"
+
+    # =========================
+    # 2. CACHE CHECK
+    # =========================
+    if key in geo_cache:
+        return geo_cache[key]
+
+    # =========================
+    # 3. AUTOCORRECTION
+    # =========================
+    match = get_close_matches(raw, KNOWN_CITIES, n=1, cutoff=0.7)
+    if match:
+        raw = match[0]
+
+    # =========================
+    # 4. OPENWEATHER DIRECT (FAST PATH)
+    # =========================
+    data = await safe_request(
+        "https://api.openweathermap.org/data/2.5/weather",
+        {
+            "q": raw,
+            "appid": OPENWEATHER_TOKEN,
+            "units": "metric",
+        },
+    )
+
+    if data:
+        lat = data["coord"]["lat"]
+        lon = data["coord"]["lon"]
+
+        geo_cache[key] = (lat, lon, raw.title())
+
+        return lat, lon, raw.title()
+
+    # =========================
+    # 5. FALLBACK GEOPY
+    # =========================
+    location = geolocator.geocode(raw)
+
+    if location:
+        result = (location.latitude, location.longitude, location.address)
+        geo_cache[key] = result
+        return result
+
+    return None
 
 async def city_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    text = update.message.text.strip()
-
-    if text.startswith("/"):
-        return
+    text = update.message.text
 
     try:
-        # 1) пробуем geocode
-        location = geolocator.geocode(text)
 
-        if location:
-            lat = location.latitude
-            lon = location.longitude
+        result = await resolve_city(text)
 
-        else:
-            # 2) FALLBACK — OpenWeather direct city search
-            data = await safe_request(
-                "https://api.openweathermap.org/data/2.5/weather",
-                {
-                    "q": text,
-                    "appid": OPENWEATHER_TOKEN,
-                    "units": "metric",
-                    "lang": "ru",
-                },
-            )
+        if not result:
+            await update.message.reply_text("❌ City not found")
+            return
 
-            if not data:
-                await update.message.reply_text("❌ City not found")
-                return
+        lat, lon, name = result
 
-            lat = data["coord"]["lat"]
-            lon = data["coord"]["lon"]
-
-        # 3) теперь используем старую систему (ВАЖНО!)
         weather = await get_weather(lat, lon)
         forecast = await get_forecast(lat, lon)
 
         await update.message.reply_text(
-            f"📍 {text}\n\n{weather}\n\n{forecast}",
+            f"📍 {name}\n\n{weather}\n\n{forecast}",
             parse_mode="HTML"
         )
 
     except Exception as e:
-        logger.error(f"city_weather error: {e}")
-        await update.message.reply_text(f"❌ Error: {e}")
+        logger.error(e)
+        await update.message.reply_text("❌ Error getting city weather")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
