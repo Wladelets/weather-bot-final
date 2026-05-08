@@ -137,10 +137,160 @@ async def get_forecast(lat: float, lon: float) -> str:
         },
     )
 
-    if not data or "list" not in data:
-        return "❌ Не удалось получить прогноз"
+    if not data:
+        return "❌ Forecast unavailable"
 
-    result = []
+    lines = ["📅 ПРОГНОЗ НА 4 ДНЯ\n"]
+
+    added_days = set()
+
+    for item in data["list"]:
+        dt = item["dt_txt"]
+
+        date_part = dt.split()[0]
+
+        hour = dt.split()[1][:2]
+
+        # только утро и вечер
+        if hour not in ["09", "18"]:
+            continue
+
+        if len(added_days) >= 4 and date_part not in added_days:
+            break
+
+        added_days.add(date_part)
+
+        icon = "☀️"
+
+        weather = item["weather"][0]["main"].lower()
+
+        if "rain" in weather:
+            icon = "🌧"
+        elif "cloud" in weather:
+            icon = "☁️"
+        elif "snow" in weather:
+            icon = "❄️"
+
+        lines.append(
+            f"{icon} {date_part} {hour}:00\n"
+            f"🌡 {item['main']['temp']}°C\n"
+            f"💨 {item['wind']['speed']} м/с\n"
+        )
+
+    return "\n".join(lines)
+    # ====================== UV INDEX ======================
+async def get_uv_index(lat: float, lon: float) -> str:
+    data = await safe_request(
+        "https://api.openweathermap.org/data/3.0/onecall",
+        {
+            "lat": lat,
+            "lon": lon,
+            "appid": OPENWEATHER_TOKEN,
+            "exclude": "minutely,hourly,daily,alerts",
+            "units": "metric",
+        },
+    )
+
+    if not data:
+        return "❌ UV unavailable"
+
+    uv = data.get("current", {}).get("uvi", 0)
+
+    if uv < 3:
+        level = "🟢 Low"
+    elif uv < 6:
+        level = "🟡 Medium"
+    elif uv < 8:
+        level = "🟠 High"
+    else:
+        level = "🔴 Extreme"
+
+    return f"🌈 UV Index: {uv} ({level})"
+
+
+# ====================== AIR QUALITY ======================
+async def get_air_quality(lat: float, lon: float) -> str:
+    data = await safe_request(
+        "http://api.openweathermap.org/data/2.5/air_pollution",
+        {
+            "lat": lat,
+            "lon": lon,
+            "appid": OPENWEATHER_TOKEN,
+        },
+    )
+
+    if not data:
+        return "❌ Air quality unavailable"
+
+    air = data["list"][0]
+
+    aqi = air["main"]["aqi"]
+
+    levels = {
+        1: "🟢 Good",
+        2: "🟡 Fair",
+        3: "🟠 Moderate",
+        4: "🔴 Poor",
+        5: "⚫ Very Poor",
+    }
+
+    comp = air["components"]
+
+    return (
+        f"🌬 AIR QUALITY\n"
+        f"AQI: {aqi} ({levels.get(aqi)})\n"
+        f"PM2.5: {comp['pm2_5']}\n"
+        f"PM10: {comp['pm10']}\n"
+        f"CO: {comp['co']}\n"
+        f"O₃: {comp['o3']}"
+    )
+
+
+# ====================== SUN INFO ======================
+async def get_sun_info(lat: float, lon: float) -> str:
+    data = await safe_request(
+        "https://api.openweathermap.org/data/2.5/weather",
+        {
+            "lat": lat,
+            "lon": lon,
+            "appid": OPENWEATHER_TOKEN,
+            "units": "metric",
+        },
+    )
+
+    if not data:
+        return "❌ Sun info unavailable"
+
+    sunrise = datetime.fromtimestamp(data["sys"]["sunrise"]).strftime("%H:%M")
+    sunset = datetime.fromtimestamp(data["sys"]["sunset"]).strftime("%H:%M")
+
+    return (
+        f"☀️ Sunrise: {sunrise}\n"
+        f"🌙 Sunset: {sunset}"
+    )
+
+
+# ====================== AI WEATHER ADVICE ======================
+def generate_ai_advice(temp, wind, humidity, uv):
+    advice = []
+
+    if temp > 30:
+        advice.append("🥵 Очень жарко — пей больше воды")
+
+    if wind > 10:
+        advice.append("🌪 Сильный ветер")
+
+    if humidity > 85:
+        advice.append("💧 Высокая влажность")
+
+    if uv > 6:
+        advice.append("🧴 Используй SPF")
+
+    if not advice:
+        advice.append("✅ Погода комфортная")
+
+    return "\n".join(advice)
+    
 
     # ======================
     # ПРОГНОЗ КАЖДЫЕ 3 ЧАСА
@@ -290,17 +440,59 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
         address_task = loop.run_in_executor(None, get_address, lat, lon)
         
-        weather, forecast, address = await asyncio.gather(
+        weather_data = await safe_request(
+            "https://api.openweathermap.org/data/2.5/weather",
+            {
+                "lat": lat,
+                "lon": lon,
+                "appid": OPENWEATHER_TOKEN,
+                "units": "metric",
+                "lang": "ru",
+            },
+        )
+        
+        weather, forecast, address, uv, air, sun = await asyncio.gather(
             get_weather(lat, lon),
             get_forecast(lat, lon),
-            address_task
+            address_task,
+            get_uv_index(lat, lon),
+            get_air_quality(lat, lon),
+            get_sun_info(lat, lon),
+        )
+        ai_advice = generate_ai_advice(
+            weather_data["main"]["temp"],
+            weather_data["wind"]["speed"],
+            weather_data["main"]["humidity"],
+            weather_data.get("uvi", 0),
+        )
+        
+        map_url = (
+            f"https://tile.openweathermap.org/map/precipitation_new/5/"
+            f"{int((lon+180)/360*32)}/"
+            f"{int((1-(lat+90)/180)*32)}.png"
+            f"?appid={OPENWEATHER_TOKEN}"
         )
 
         map_url = f"https://static-maps.yandex.ru/1.x/?ll={lon},{lat}&size=450,300&z=14&l=map&pt={lon},{lat},pm2rdm"
 
         caption = (
-            f"📍 {address}\n\n"
+            f"📍 <b>{address}</b>\n\n"
+        
+            f"╔════════════╗\n"
+            f"      🌦 WEATHER DASHBOARD\n"
+            f"╚════════════╝\n\n"
+        
             f"{weather}\n\n"
+        
+            f"{uv}\n\n"
+        
+            f"{air}\n\n"
+        
+            f"{sun}\n\n"
+        
+            f"🧠 <b>AI ADVICE</b>\n"
+            f"{ai_advice}\n\n"
+        
             f"{forecast}"
         )
         
@@ -329,6 +521,8 @@ async def forecast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Global error: {context.error}")
+
+parse_mode="HTML"
 
 
 # ====================== BOT SETUP ======================
