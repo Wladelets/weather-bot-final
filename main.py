@@ -65,12 +65,13 @@ weather_cache = {}
 weather_alert_tasks = {}
 city_cache = {}  # name -> (lat, lon)
 geo_cache = {}   # normalized query -> result
-def normalize_city(text: str) -> str:
-    return text.strip().lower()
-    KNOWN_CITIES = [
+KNOWN_CITIES = [
     "london", "paris", "tokyo", "new york", "berlin",
     "madrid", "rome"
 ]
+
+def normalize_city(text: str) -> str:
+    return text.strip().lower()
 
 def is_spam(user_id: int) -> bool:
     """Простая защита от спама (2 секунды между запросами)"""
@@ -668,7 +669,7 @@ async def resolve_city(text: str, user_lat=None, user_lon=None):
     # 1. NEAR ME SUPPORT
     # =========================
     if raw in ["near me", "me", "my location"] and user_lat and user_lon:
-        return user_lat, user_lon, "📍 Your location"
+    return user_lat, user_lon, "📍 Your location"
 
     # =========================
     # 2. CACHE CHECK
@@ -679,7 +680,7 @@ async def resolve_city(text: str, user_lat=None, user_lon=None):
     # =========================
     # 3. AUTOCORRECTION
     # =========================
-    match = get_close_matches(raw, KNOWN_CITIES, n=1, cutoff=0.6)
+    match = get_close_matches(raw, KNOWN_CITIES, n=1, cutoff=0.7)
     if match:
         raw = match[0]
 
@@ -720,13 +721,7 @@ async def city_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = normalize_city(update.message.text)
 
     try:
-
         result = await resolve_city(text)
-        if len(result) == 2:
-            lat, lon = result
-            name = text.title()
-        else:
-            lat, lon, name = result
 
         if not result:
             await update.message.reply_text("❌ City not found")
