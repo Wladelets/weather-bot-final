@@ -60,6 +60,8 @@ user_locations: Dict[int, Tuple[float, float]] = {}
 last_request: Dict[int, float] = {}   # Анти-спам
 
 user_languages: Dict[int, str] = {}
+weather_cache = {}
+weather_alert_tasks = {}
 
 
 def is_spam(user_id: int) -> bool:
@@ -104,6 +106,18 @@ def get_address(lat: float, lon: float) -> str:
 
 
 async def get_weather(lat: float, lon: float) -> str:
+    cache_key = f"{lat}:{lon}"
+
+    if cache_key in weather_cache:
+    
+        cached_data, cached_time = weather_cache[cache_key]
+    
+        if time.time() - cached_time < 600:
+            data = cached_data
+        else:
+            data = None
+    else:
+        data = None
 
     data = await safe_request(
         "https://api.openweathermap.org/data/2.5/weather",
@@ -117,6 +131,11 @@ async def get_weather(lat: float, lon: float) -> str:
     )
 
     if not data:
+        data = await safe_request(...)
+        weather_cache[cache_key] = (
+        data,
+        time.time()
+    )
         return "❌ Не удалось получить погоду"
 
     desc = data["weather"][0]["description"].capitalize()
@@ -374,76 +393,56 @@ def generate_ai_advice(temp, wind, humidity, uv):
         advice.append("✅ Погода комфортная")
 
     return "\n".join(advice)
-    
 
-    # ======================
-    # ПРОГНОЗ НА 4 ДНЯ
-    # ======================
+async def weather_alert_loop(user_id: int, context):
 
-    result.append("\n")
-    result.append("📅 ПРОГНОЗ НА 4 ДНЯ\n")
+    while True:
 
-    grouped = defaultdict(list)
+        try:
 
-    for item in data["list"]:
-        dt = item["dt_txt"]
+            if user_id not in user_locations:
+                return
 
-        date = dt.split(" ")[0]
-        hour = int(dt.split(" ")[1][:2])
+            lat, lon = user_locations[user_id]
 
-        if hour not in [9, 18]:
-            continue
+            data = await safe_request(
+                "https://api.openweathermap.org/data/2.5/forecast",
+                {
+                    "lat": lat,
+                    "lon": lon,
+                    "appid": OPENWEATHER_TOKEN,
+                    "units": "metric",
+                    "lang": "ru",
+                },
+            )
 
-        label = "🌅 Утро" if hour == 9 else "🌙 Вечер"
+            if not data:
+                await asyncio.sleep(1800)
+                continue
 
-        desc = item["weather"][0]["description"].capitalize()
+            next_forecast = data["list"][0]
 
-        emoji = weather_emoji(desc)
+            weather_main = next_forecast["weather"][0]["main"].lower()
 
-        temp = round(item["main"]["temp"])
+            if "rain" in weather_main:
 
-        grouped[date].append(
-            f"{label}\n"
-            f"{emoji} {desc}\n"
-            f"🌡 {temp}°C"
-        )
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text="⚠️ Через несколько часов ожидается дождь 🌧"
+                )
 
-    day_count = 0
+            if "snow" in weather_main:
 
-    for date, entries in grouped.items():
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text="❄️ Ожидается снег"
+                )
 
-        if day_count >= 4:
-            break
+        except Exception as e:
+            logger.error(e)
 
-        pretty = datetime.strptime(date, "%Y-%m-%d").strftime("%d.%m")
+        await asyncio.sleep(3600)
 
-        result.append("━━━━━━━━━━")
-        result.append(f"🗓 {pretty}")
-
-        for entry in entries:
-            result.append(entry)
-            result.append("")
-
-        day_count += 1
-
-    # ======================
-    # AI WEATHER ADVICE
-    # ======================
-
-    current_temp = data["list"][0]["main"]["temp"]
-
-    result.append("━━━━━━━━━━")
-
-    if current_temp >= 30:
-        result.append("🥵 Совет: сегодня лучше избегать солнца.")
-    elif current_temp <= 0:
-        result.append("🧥 Совет: одевайся теплее.")
-    elif current_temp <= 10:
-        result.append("☕ Совет: прохладно, лучше взять куртку.")
-    else:
-        result.append("😎 Отличная погода для прогулки.")
-
-    return "\n".join(result)
 
 def weather_emoji(desc: str) -> str:
     desc = desc.lower()
@@ -468,7 +467,7 @@ def tr(lang: str, ru: str, en: str):
     if lang.startswith("ru"):
         return ru
 
-    return en
+        return en
 
 # ====================== HANDLERS ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -521,6 +520,12 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
             theme = "☀️ DAY MODE"
         
         user_locations[user.id] = (lat, lon)
+        # запуск alert loop
+        if user.id not in weather_alert_tasks:
+        
+            weather_alert_tasks[user.id] = asyncio.create_task(
+                weather_alert_loop(user.id, context)
+            )
 
         # Параллельные запросы к geolocator и API
         loop = asyncio.get_running_loop()
@@ -563,6 +568,10 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"&z=9"
             f"&l=map"
             f"&pt={lon},{lat},pm2rdm"
+        )
+
+        radar_url = (
+            "https://tilecache.rainviewer.com/"
         )
         
         radar_gif = (
@@ -638,6 +647,45 @@ async def forecast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     forecast_text = await get_forecast(lat, lon)
     await update.message.reply_text(forecast_text)
 
+async def city_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    text = update.message.text
+
+    # игнор команд
+    if text.startswith("/"):
+        return
+
+    try:
+
+        location = geolocator.geocode(text)
+
+        if not location:
+            await update.message.reply_text(
+                "❌ City not found"
+            )
+            return
+
+        lat = location.latitude
+        lon = location.longitude
+
+        weather = await get_weather(lat, lon)
+
+        forecast = await get_forecast(lat, lon)
+
+        await update.message.reply_text(
+            f"📍 {location.address}\n\n"
+            f"{weather}\n\n"
+            f"{forecast}",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        logger.error(e)
+
+        await update.message.reply_text(
+            "❌ Error getting city weather"
+        )
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
@@ -706,8 +754,13 @@ bot_app.add_handler(
     CallbackQueryHandler(button_callback)
 )
 bot_app.add_handler(MessageHandler(filters.LOCATION, handle_location))
+bot_app.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        city_weather
+    )
+)
 bot_app.add_error_handler(error_handler)
-
 
 # ====================== FASTAPI ======================
 @app.get("/")
