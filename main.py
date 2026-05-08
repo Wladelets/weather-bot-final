@@ -16,6 +16,8 @@ from telegram.ext import (
 from geopy.geocoders import Nominatim
 from dotenv import load_dotenv
 from httpx import AsyncClient, Timeout, RequestError
+from datetime import datetime
+from collections import defaultdict
 
 # ====================== CONFIG ======================
 load_dotenv()
@@ -99,28 +101,166 @@ async def get_weather(lat: float, lon: float) -> str:
     if not data or "main" not in data:
         return "❌ Не удалось получить погоду"
     return (
-        f"🌤 {data['weather'][0]['description'].capitalize()}\n"
-        f"🌡 {data['main']['temp']}°C (ощущается {data['main']['feels_like']}°C)\n"
-        f"💧 Влажность: {data['main']['humidity']}%\n"
-        f"💨 Ветер: {data['wind']['speed']} м/с"
-    )
+        desc = data['weather'][0]['description'].capitalize()
+emoji = weather_emoji(desc)
+
+sunrise = datetime.fromtimestamp(data["sys"]["sunrise"]).strftime("%H:%M")
+sunset = datetime.fromtimestamp(data["sys"]["sunset"]).strftime("%H:%M")
+
+return (
+    f"╔════════════════╗\n"
+    f"      🌍 WEATHER ULTRA\n"
+    f"╚════════════════╝\n\n"
+
+    f"{emoji} {desc}\n\n"
+
+    f"🌡 Температура: {data['main']['temp']}°C\n"
+    f"🥵 Ощущается: {data['main']['feels_like']}°C\n"
+    f"💧 Влажность: {data['main']['humidity']}%\n"
+    f"💨 Ветер: {data['wind']['speed']} м/с\n"
+    f"📊 Давление: {data['main']['pressure']} hPa\n\n"
+
+    f"🌅 Восход: {sunrise}\n"
+    f"🌇 Закат: {sunset}"
+)
 
 
 async def get_forecast(lat: float, lon: float) -> str:
     data = await safe_request(
         "https://api.openweathermap.org/data/2.5/forecast",
-        {"lat": lat, "lon": lon, "appid": OPENWEATHER_TOKEN, "units": "metric", "lang": "ru"},
+        {
+            "lat": lat,
+            "lon": lon,
+            "appid": OPENWEATHER_TOKEN,
+            "units": "metric",
+            "lang": "ru",
+        },
     )
+
     if not data or "list" not in data:
         return "❌ Не удалось получить прогноз"
-    lines = ["📅 Прогноз на ближайшие часы:"]
-    for item in data["list"][:7]:
-        lines.append(
-            f"🕓 {item['dt_txt']} — {item['weather'][0]['description'].capitalize()}, "
-            f"🌡 {item['main']['temp']}°C, 💨 {item['wind']['speed']} м/с"
-        )
-    return "\n".join(lines)
 
+    result = []
+
+    # ======================
+    # ПРОГНОЗ КАЖДЫЕ 3 ЧАСА
+    # ======================
+
+    result.append("📍 СЕГОДНЯ ПО ЧАСАМ\n")
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    hourly_count = 0
+
+    for item in data["list"]:
+        dt = item["dt_txt"]
+
+        if not dt.startswith(today):
+            continue
+
+        hour = dt.split(" ")[1][:5]
+
+        desc = item["weather"][0]["description"].capitalize()
+
+        emoji = weather_emoji(desc)
+
+        temp = round(item["main"]["temp"])
+
+        result.append(
+            f"🕒 {hour}   {emoji} {temp}°C   {desc}"
+        )
+
+        hourly_count += 1
+
+        if hourly_count >= 8:
+            break
+
+    # ======================
+    # ПРОГНОЗ НА 4 ДНЯ
+    # ======================
+
+    result.append("\n")
+    result.append("📅 ПРОГНОЗ НА 4 ДНЯ\n")
+
+    grouped = defaultdict(list)
+
+    for item in data["list"]:
+        dt = item["dt_txt"]
+
+        date = dt.split(" ")[0]
+        hour = int(dt.split(" ")[1][:2])
+
+        if hour not in [9, 18]:
+            continue
+
+        label = "🌅 Утро" if hour == 9 else "🌙 Вечер"
+
+        desc = item["weather"][0]["description"].capitalize()
+
+        emoji = weather_emoji(desc)
+
+        temp = round(item["main"]["temp"])
+
+        grouped[date].append(
+            f"{label}\n"
+            f"{emoji} {desc}\n"
+            f"🌡 {temp}°C"
+        )
+
+    day_count = 0
+
+    for date, entries in grouped.items():
+
+        if day_count >= 4:
+            break
+
+        pretty = datetime.strptime(date, "%Y-%m-%d").strftime("%d.%m")
+
+        result.append("━━━━━━━━━━")
+        result.append(f"🗓 {pretty}")
+
+        for entry in entries:
+            result.append(entry)
+            result.append("")
+
+        day_count += 1
+
+    # ======================
+    # AI WEATHER ADVICE
+    # ======================
+
+    current_temp = data["list"][0]["main"]["temp"]
+
+    result.append("━━━━━━━━━━")
+
+    if current_temp >= 30:
+        result.append("🥵 Совет: сегодня лучше избегать солнца.")
+    elif current_temp <= 0:
+        result.append("🧥 Совет: одевайся теплее.")
+    elif current_temp <= 10:
+        result.append("☕ Совет: прохладно, лучше взять куртку.")
+    else:
+        result.append("😎 Отличная погода для прогулки.")
+
+    return "\n".join(result)
+
+def weather_emoji(desc: str) -> str:
+    desc = desc.lower()
+
+    if "ясно" in desc:
+        return "☀️"
+    if "обла" in desc:
+        return "☁️"
+    if "дожд" in desc:
+        return "🌧"
+    if "гроза" in desc:
+        return "⛈"
+    if "снег" in desc:
+        return "❄️"
+    if "туман" in desc:
+        return "🌫"
+
+    return "🌤"
 
 # ====================== HANDLERS ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -157,15 +297,13 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         map_url = f"https://static-maps.yandex.ru/1.x/?ll={lon},{lat}&size=450,300&z=14&l=map&pt={lon},{lat},pm2rdm"
-        
+
         caption = (
-            f"📍 {address}\n"
-            f"{'─'*25}\n\n"
+            f"📍 {address}\n\n"
             f"{weather}\n\n"
-            f"{'─'*25}\n"
             f"{forecast}"
         )
-
+        
         await update.message.reply_photo(photo=map_url, caption=caption)
 
         if OWNER_ID:
