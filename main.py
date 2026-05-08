@@ -207,7 +207,9 @@ async def get_forecast(lat: float, lon: float) -> str:
 
     result.append("🕒 <b>СЕГОДНЯ ПО ЧАСАМ</b>\n")
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    from datetime import timezone
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     hourly_count = 0
 
@@ -579,12 +581,16 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"&pt={lon},{lat},pm2rdm"
         )
 
-        radar_url = (
-            "https://tilecache.rainviewer.com/"
+        radar_url = "https://tilecache.rainviewer.com/v2/radar/latest/512/6/32/22/2/1_1.png"
+
+        await update.message.reply_photo(
+            photo=radar_url,
+            caption="🛰 Radar snapshot (last 10 min)"
         )
         
-        radar_gif = (
-            "https://media.giphy.com/media/3o7TKtnuHOHHUjR38Y/giphy.gif"
+        radar_map = (
+            f"https://tile.openweathermap.org/map/precipitation_new/"
+            f"5/{int(lon)}/{int(lat)}.png?appid={OPENWEATHER_TOKEN}"
         )
         
         keyboard = InlineKeyboardMarkup([
@@ -596,44 +602,29 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("🌍 Change location", callback_data="change")
             ]
         ])
-        caption = (
-            f"╔══════════════════╗\n"
-            f"     🌍 WEATHER ULTRA\n"
-            f"╚══════════════════╝\n\n"
-                
-            f"📍 <b>{address}</b>\n\n"
-
-            f"{theme}\n\n"
-                
-            f"{weather}\n\n"
-                
-            f"━━━━━━━━━━\n"
-            f"{uv}\n\n"
-                
-            f"━━━━━━━━━━\n"
-            f"{air}\n\n"
-                
-            f"━━━━━━━━━━\n"
-            f"{sun}\n\n"
-                
-            f"━━━━━━━━━━\n"
-            f"🧠 <b>SMART WEATHER INSIGHT</b>\n"
-            f"{ai_advice}\n\n"
-                
-            f"━━━━━━━━━━\n"
-            f"{forecast}"
-        )
-                
-        
         await update.message.reply_photo(
             photo=map_url,
-            caption=caption,
+            caption=(
+                f"🌍 WEATHER ULTRA\n\n"
+                f"📍 {address}\n\n"
+                f"{theme}\n\n"
+                f"{weather}\n\n"
+                f"{uv}\n"
+                f"{air}\n"
+                f"{sun}\n\n"
+                f"🧠 SMART INSIGHT:\n{ai_advice}"
+            ),
             parse_mode="HTML",
             reply_markup=keyboard
         )
+        await update.message.reply_text(
+            forecast,
+            parse_mode="HTML"
+        )
+        
         await update.message.reply_animation(
             animation=radar_gif,
-            caption="🛰 Live Weather Radar"
+            caption="🛰 Live Weather Radar""🌧 Rain probability next hour: HIGH"
         )
 
         if OWNER_ID:
