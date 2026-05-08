@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from httpx import AsyncClient, Timeout, RequestError
 from datetime import datetime
 from collections import defaultdict
+from difflib import get_close_matches
 
 # ====================== CONFIG ======================
 load_dotenv()
@@ -62,7 +63,14 @@ last_request: Dict[int, float] = {}   # Анти-спам
 user_languages: Dict[int, str] = {}
 weather_cache = {}
 weather_alert_tasks = {}
-
+city_cache = {}  # name -> (lat, lon)
+geo_cache = {}   # normalized query -> result
+def normalize_city(text: str) -> str:
+    return text.strip().lower()
+    KNOWN_CITIES = [
+    "london", "paris", "tokyo", "new york", "berlin",
+    "madrid", "rome"
+]
 
 def is_spam(user_id: int) -> bool:
     """Простая защита от спама (2 секунды между запросами)"""
@@ -653,6 +661,7 @@ async def forecast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def resolve_city(text: str, user_lat=None, user_lon=None):
 
     raw = text.strip().lower()
+    raw = normalize_city(raw)
     key = raw
 
     # =========================
@@ -670,7 +679,7 @@ async def resolve_city(text: str, user_lat=None, user_lon=None):
     # =========================
     # 3. AUTOCORRECTION
     # =========================
-    match = get_close_matches(raw, KNOWN_CITIES, n=1, cutoff=0.7)
+    match = get_close_matches(raw, KNOWN_CITIES, n=1, cutoff=0.6)
     if match:
         raw = match[0]
 
@@ -708,11 +717,16 @@ async def resolve_city(text: str, user_lat=None, user_lon=None):
 
 async def city_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    text = update.message.text
+    text = normalize_city(update.message.text)
 
     try:
 
         result = await resolve_city(text)
+        if len(result) == 2:
+            lat, lon = result
+            name = text.title()
+        else:
+            lat, lon, name = result
 
         if not result:
             await update.message.reply_text("❌ City not found")
